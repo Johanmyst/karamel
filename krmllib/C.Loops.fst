@@ -59,6 +59,25 @@ let rec for start finish inv f =
     for (UInt32.(start +^ 1ul)) finish inv f
   end
 
+(* Same as above but now supporting the ST effect for additional memory modification flexibility *)
+val for_st:
+  start:UInt32.t ->
+  finish:UInt32.t{UInt32.v finish >= UInt32.v start} ->
+  inv:(HS.mem -> nat -> Type0) ->
+  f:(i:UInt32.t{UInt32.(v start <= v i /\ v i < v finish)} -> ST unit
+                        (requires (fun h -> inv h (UInt32.v i)))
+                        (ensures (fun h_1 _ h_2 -> UInt32.(inv h_1 (v i) /\ inv h_2 (v i + 1)))) ) ->
+  ST unit
+    (requires (fun h -> inv h (UInt32.v start)))
+    (ensures (fun _ _ h_2 -> inv h_2 (UInt32.v finish)))
+let rec for_st start finish inv f =
+  if start = finish then
+    ()
+  else begin
+    f start;
+    for_st (UInt32.(start +^ 1ul)) finish inv f
+  end
+
 val for64:
   start:UInt64.t ->
   finish:UInt64.t{UInt64.v finish >= UInt64.v start} ->
@@ -75,6 +94,26 @@ let rec for64 start finish inv f =
   else begin
     f start;
     for64 (UInt64.(start +^ 1UL)) finish inv f
+  end
+
+(* Same as above but now supporting the ST effect for additional memory modification flexibility *)
+
+val for64_st:
+  start:UInt64.t ->
+  finish:UInt64.t{UInt64.v finish >= UInt64.v start} ->
+  inv:(HS.mem -> nat -> Type0) ->
+  f:(i:UInt64.t{UInt64.(v start <= v i /\ v i < v finish)} -> ST unit
+                        (requires (fun h -> inv h (UInt64.v i)))
+                        (ensures (fun h_1 _ h_2 -> UInt64.(inv h_1 (v i) /\ inv h_2 (v i + 1)))) ) ->
+  ST unit
+    (requires (fun h -> inv h (UInt64.v start)))
+    (ensures (fun _ _ h_2 -> inv h_2 (UInt64.v finish)))
+let rec for64_st start finish inv f =
+  if start = finish then
+    ()
+  else begin
+    f start;
+    for64_st (UInt64.(start +^ 1UL)) finish inv f
   end
 
 
@@ -98,6 +137,25 @@ let rec reverse_for start finish inv f =
   else begin
     f start;
     reverse_for (UInt32.(start -^ 1ul)) finish inv f
+  end
+
+(* Same as above but now supporting the ST effect for additional memory modification flexibility *)
+val reverse_for_st:
+  start:UInt32.t ->
+  finish:UInt32.t{UInt32.v finish <= UInt32.v start} ->
+  inv:(HS.mem -> nat -> Type0) ->
+  f:(i:UInt32.t{UInt32.(v start >= v i /\ v i > v finish)} -> ST unit
+                        (requires (fun h -> inv h (UInt32.v i)))
+                        (ensures (fun h_1 _ h_2 -> UInt32.(inv h_1 (v i) /\ inv h_2 (v i - 1)))) ) ->
+  ST unit
+    (requires (fun h -> inv h (UInt32.v start)))
+    (ensures (fun _ _ h_2 -> inv h_2 (UInt32.v finish)))
+let rec reverse_for_st start finish inv f =
+  if start = finish then
+    ()
+  else begin
+    f start;
+    reverse_for_st (UInt32.(start -^ 1ul)) finish inv f
   end
 
 (* To be extracted as:
@@ -127,6 +185,26 @@ let rec interruptible_for start finish inv f =
     then (start', true)
     else interruptible_for start' finish inv f
 
+(* Same as above but now supporting the ST effect for additional memory modification flexibility *)
+val interruptible_for_st:
+  start:UInt32.t ->
+  finish:UInt32.t{UInt32.v finish >= UInt32.v start} ->
+  inv:(HS.mem -> nat -> bool -> GTot Type0) ->
+  f:(i:UInt32.t{UInt32.(v start <= v i /\ v i < v finish)} -> ST bool
+                        (requires (fun h -> inv h (UInt32.v i) false))
+                        (ensures (fun h_1 b h_2 -> inv h_1 (UInt32.v i) false /\ inv h_2 UInt32.(v i + 1) b)) ) ->
+  ST (UInt32.t * bool)
+    (requires (fun h -> inv h (UInt32.v start) false))
+    (ensures (fun _ res h_2 -> let (i, b) = res in ((if b then True else i == finish) /\ inv h_2 (UInt32.v i) b)))
+let rec interruptible_for_st start finish inv f =
+  if start = finish then
+    (finish, false)
+  else
+    let start' = UInt32.(start +^ 1ul) in
+    if f start
+    then (start', true)
+    else interruptible_for_st start' finish inv f
+
 (* To be extracted as:
     while (true) {
       bool b = <f> i;
@@ -146,6 +224,19 @@ val do_while:
 let rec do_while inv f =
   if not (f ()) then
     do_while inv f
+
+(* Same as above but now supporting the ST effect for additional memory modification flexibility *)
+val do_while_st:
+  inv:(HS.mem -> bool -> GTot Type0) ->
+  f:(unit -> ST bool
+            (requires (fun h -> inv h false))
+            (ensures (fun h_1 b h_2 -> inv h_1 false /\ inv h_2 b)) ) ->
+  ST unit
+    (requires (fun h -> inv h false))
+    (ensures (fun _ _ h_2 -> inv h_2 true))
+let rec do_while_st inv f =
+  if not (f ()) then
+    do_while_st inv f
 
 
 (* Extracted as:
@@ -169,6 +260,25 @@ let rec while #test_pre #test_post test body =
   if test () then begin
     body ();
     while #test_pre #test_post test body
+  end
+
+(* Same as above but now supporting the ST effect for additional memory modification flexibility *)
+val while_st:
+  #test_pre: (HS.mem -> GTot Type0) ->
+  #test_post: (bool -> HS.mem -> GTot Type0) ->
+  $test: (unit -> ST bool
+    (requires (fun h -> test_pre h))
+    (ensures (fun h0 x h1 -> test_post x h1))) ->
+  body: (unit -> ST unit
+    (requires (fun h -> test_post true h))
+    (ensures (fun h0 _ h1 -> test_pre h1))) ->
+  ST unit
+    (requires (fun h -> test_pre h))
+    (ensures (fun h0 _ h1 -> test_post false h1))
+let rec while_st #test_pre #test_post test body =
+  if test () then begin
+    body ();
+    while_st #test_pre #test_post test body
   end
 
 
@@ -198,6 +308,26 @@ let rec interruptible_reverse_for start finish inv f =
     if f start
     then (start', true)
     else interruptible_reverse_for start' finish inv f
+
+(* Same as above but now supporting the ST effect for additional memory modification flexibility *)
+val interruptible_reverse_for_st:
+  start:UInt32.t ->
+  finish:UInt32.t{UInt32.v finish <= UInt32.v start} ->
+  inv:(HS.mem -> nat -> bool -> GTot Type0) ->
+  f:(i:UInt32.t{UInt32.(v start >= v i /\ v i > v finish)} -> ST bool
+                        (requires (fun h -> inv h (UInt32.v i) false))
+                        (ensures (fun h_1 b h_2 -> inv h_1 (UInt32.v i) false /\ inv h_2 UInt32.(v i - 1) b)) ) ->
+  ST (UInt32.t * bool)
+    (requires (fun h -> inv h (UInt32.v start) false))
+    (ensures (fun _ res h_2 -> let (i, b) = res in ((if b then True else i == finish) /\ inv h_2 (UInt32.v i) b)))
+let rec interruptible_reverse_for_st start finish inv f =
+  if start = finish then
+    (finish, false)
+  else
+    let start' = UInt32.(start -^ 1ul) in
+    if f start
+    then (start', true)
+    else interruptible_reverse_for_st start' finish inv f
 
 
 (* Non-primitive combinators that can be expressed in terms of the above ******)
@@ -414,7 +544,7 @@ let repeat #a l f b max fc =
 
 (** The type of the specification of the loop body (the function f
     given to Spec.Loops.repeat_range *)
-    
+
 inline_for_extraction
 let repeat_range_body_spec
   (a: Type0)
@@ -455,7 +585,7 @@ let repeat_range_body_impl
   ))
 
 (** The implementation of the actual loop
- 
+
    To be extracted as:
     for (int i = min; i < max; ++i)
     f(b, i);
